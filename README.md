@@ -31,6 +31,8 @@ Double-click `dist\uninstall.bat`.
   **Thumbnails**, and restart Explorer (or re-run `install.bat` and answer Y).
 - **A SolidWorks file shows no picture**: the file was saved without a preview (rare, e.g. some
   files written by batch tools). Re-saving it in SolidWorks fixes it.
+- **Test a single file:** drag it onto `dist\test-thumbnail.bat`. It shows each step
+  (registration, loading, rendering) and opens the thumbnail it produced.
 - **Another program took over thumbnails** (e.g. a CAD viewer installed later): run `install.bat` again.
 
 ## Build from source
