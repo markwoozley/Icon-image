@@ -103,7 +103,7 @@ public:
                 return MakeBitmap(img.width, img.height, img.bgra.data(), phbmp);
             }
             if (k == ThumbKind::EncodedImage) {
-                *alpha = WTSAT_ARGB;
+                *alpha = WTSAT_RGB;
                 return DecodeImage(encoded, cx, phbmp);
             }
         } catch (...) {
@@ -129,6 +129,25 @@ private:
         return S_OK;
     }
 
+    // Makes the preview opaque. Some SolidWorks versions store the preview
+    // with an alpha channel that is (almost) entirely zero even though the
+    // colours are valid; in that case the alpha channel is ignored. Otherwise
+    // transparent areas are blended onto white.
+    static void FlattenOntoWhite(BYTE* px, size_t count) {
+        size_t clear = 0;
+        for (size_t i = 0; i < count; i++)
+            if (px[i * 4 + 3] == 0) clear++;
+        bool ignoreAlpha = clear * 100 >= count * 90;
+        for (size_t i = 0; i < count; i++) {
+            BYTE* p = px + i * 4;
+            if (!ignoreAlpha) {
+                unsigned a = p[3];
+                for (int c = 0; c < 3; c++) p[c] = (BYTE)((p[c] * a + 255 * (255 - a) + 127) / 255);
+            }
+            p[3] = 255;
+        }
+    }
+
     // Decodes a PNG/BMP with WIC, scaled so its longest side is at most cx.
     static HRESULT DecodeImage(const std::vector<uint8_t>& enc, UINT cx, HBITMAP* out) {
         IWICImagingFactory* factory = nullptr;
@@ -146,7 +165,7 @@ private:
         if (SUCCEEDED(hr)) hr = decoder->GetFrame(0, &frame);
         if (SUCCEEDED(hr)) hr = factory->CreateFormatConverter(&conv);
         if (SUCCEEDED(hr))
-            hr = conv->Initialize(frame, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+            hr = conv->Initialize(frame, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0,
                                   WICBitmapPaletteTypeCustom);
         UINT w = 0, h = 0;
         if (SUCCEEDED(hr)) hr = conv->GetSize(&w, &h);
@@ -168,7 +187,10 @@ private:
                 DIBSECTION ds;
                 GetObject(bmp, sizeof(ds), &ds);
                 hr = src->CopyPixels(nullptr, w * 4, w * h * 4, (BYTE*)ds.dsBm.bmBits);
-                if (SUCCEEDED(hr)) *out = bmp;
+                if (SUCCEEDED(hr)) {
+                    FlattenOntoWhite((BYTE*)ds.dsBm.bmBits, (size_t)w * h);
+                    *out = bmp;
+                }
                 else DeleteObject(bmp);
             }
         }
@@ -248,9 +270,31 @@ std::vector<std::wstring> HandlerKeys(const wchar_t* ext) {
     };
     // Also cover the ProgID the extension is associated with (e.g. one
     // installed by a CAD program), which Explorer may consult first.
-    std::wstring progId = GetString(HKEY_CLASSES_ROOT, ext);
-    if (!progId.empty() && progId.find(L'\\') == std::wstring::npos)
-        keys.push_back(base + progId + L"\\ShellEx\\" + kThumbHandlerKey);
+    std::vector<std::wstring> progIds = {GetString(HKEY_CLASSES_ROOT, ext)};
+    std::wstring fileExts = std::wstring(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\") + ext;
+    HKEY k;
+    wchar_t buf[512];
+    DWORD size = sizeof(buf);
+    if (RegGetValueW(HKEY_CURRENT_USER, (fileExts + L"\\UserChoice").c_str(), L"ProgId", RRF_RT_REG_SZ, nullptr, buf,
+                     &size) == ERROR_SUCCESS)
+        progIds.push_back(buf);
+    for (const std::wstring& sub : {std::wstring(ext) + L"\\OpenWithProgids", fileExts + L"\\OpenWithProgids"}) {
+        HKEY root = sub[0] == L'.' ? HKEY_CLASSES_ROOT : HKEY_CURRENT_USER;
+        if (RegOpenKeyExW(root, sub.c_str(), 0, KEY_READ, &k) != ERROR_SUCCESS) continue;
+        for (DWORD i = 0;; i++) {
+            DWORD n = 512;
+            if (RegEnumValueW(k, i, buf, &n, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+            progIds.push_back(buf);
+        }
+        RegCloseKey(k);
+    }
+    for (auto& id : progIds) {
+        if (id.empty() || id.find(L'\\') != std::wstring::npos) continue;
+        std::wstring key = base + id + L"\\ShellEx\\" + kThumbHandlerKey;
+        bool dup = false;
+        for (auto& e : keys) dup = dup || _wcsicmp(e.c_str(), key.c_str()) == 0;
+        if (!dup) keys.push_back(key);
+    }
     return keys;
 }
 

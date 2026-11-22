@@ -14,7 +14,13 @@ if not exist "%SRC%" (
 
 if exist "%DEST%\CadThumbnails.dll" "%REGSVR%" /s /u "%DEST%\CadThumbnails.dll"
 if not exist "%DEST%" mkdir "%DEST%"
-copy /y "%SRC%" "%DEST%\CadThumbnails.dll" >nul
+copy /y "%SRC%" "%DEST%\CadThumbnails.dll" >nul 2>&1
+if errorlevel 1 (
+  rem The old DLL is still loaded by the thumbnail host process; stop it and retry.
+  taskkill /f /im dllhost.exe >nul 2>&1
+  timeout /t 2 /nobreak >nul
+  copy /y "%SRC%" "%DEST%\CadThumbnails.dll" >nul
+)
 if errorlevel 1 (
   echo Could not copy the DLL. If Explorer is using an older copy, sign out and back in, then try again.
   pause

@@ -27,6 +27,21 @@ int wmain(int argc, wchar_t** argv) {
                           nullptr, RRF_RT_REG_SZ, nullptr, val, &cb);
     std::printf("HKCU .stl handler: %ls (%ld)\n", r == 0 ? val : L"<missing>", r);
 
+    // Which thumbnail handler will Explorer actually use for this file type?
+    {
+        const wchar_t* dot = wcsrchr(argv[2], L'.');
+        wchar_t clsid[128] = L"";
+        DWORD n = 128;
+        HRESULT ar = AssocQueryStringW(ASSOCF_INIT_DEFAULTTOSTAR, ASSOCSTR_SHELLEXTENSION, dot ? dot : L".x",
+                                       L"{e357fccd-a995-4576-b01f-234630154e96}", clsid, &n);
+        wchar_t prog[256] = L"";
+        n = 256;
+        AssocQueryStringW(ASSOCF_NONE, ASSOCSTR_PROGID, dot ? dot : L".x", nullptr, prog, &n);
+        std::printf("Explorer's handler for %ls (ProgID %ls): %ls %s\n", dot ? dot : L"?", prog,
+                    SUCCEEDED(ar) ? clsid : L"<none>",
+                    SUCCEEDED(ar) && _wcsicmp(clsid, L"{7FBA209C-0DBC-49BA-8ABF-EE61FF070E5B}") == 0 ? "(this add-on - good)"
+                                                                                                 : "(NOT this add-on)");
+    }
     IUnknown* unk = nullptr;
     HRESULT hr = CoCreateInstance(CLSID_Cad, nullptr, CLSCTX_INPROC_SERVER, IID_IUnknown, (void**)&unk);
     std::printf("CoCreateInstance: 0x%08lx\n", hr);
@@ -62,6 +77,19 @@ int wmain(int argc, wchar_t** argv) {
         std::string log;
         MakeThumbnail(data.data(), data.size(), (int)size, img, enc, ext, &log);
         std::printf("\n--- report ---\n%s--------------\n", log.c_str());
+        if (!enc.empty()) {
+            // Save the raw embedded preview so it can be inspected.
+            std::wstring raw = argv[3];
+            size_t d = raw.rfind(L'.');
+            if (d != std::wstring::npos) raw.resize(d);
+            raw += (enc.size() > 1 && enc[1] == 'P') ? L".preview.png" : L".preview.bmp";
+            if (FILE* o = _wfopen(raw.c_str(), L"wb")) { fwrite(enc.data(), 1, enc.size(), o); fclose(o); }
+            std::printf("Raw preview saved as %ls\n", raw.c_str());
+            if (enc.size() > 26 && enc[1] == 'P')
+                std::printf("PNG: %ux%u, bit depth %u, colour type %u\n",
+                            (enc[16] << 24) | (enc[17] << 16) | (enc[18] << 8) | enc[19],
+                            (enc[20] << 24) | (enc[21] << 16) | (enc[22] << 8) | enc[23], enc[24], enc[25]);
+        }
     }
     if (FAILED(hr)) return 1;
     BITMAP bm;
@@ -73,6 +101,15 @@ int wmain(int argc, wchar_t** argv) {
     HDC dc = GetDC(nullptr);
     GetDIBits(dc, bmp, 0, bm.bmHeight, px, (BITMAPINFO*)&bih, DIB_RGB_COLORS);
     ReleaseDC(nullptr, dc);
+    {
+        size_t white = 0, clear = 0, total = (size_t)bm.bmWidth * bm.bmHeight;
+        const BYTE* q = (const BYTE*)px;
+        for (size_t i = 0; i < total; i++) {
+            if (q[i * 4] > 245 && q[i * 4 + 1] > 245 && q[i * 4 + 2] > 245) white++;
+            if (q[i * 4 + 3] == 0) clear++;
+        }
+        std::printf("thumbnail pixels: %zu%% near-white, %zu%% transparent\n", white * 100 / total, clear * 100 / total);
+    }
     BITMAPFILEHEADER bfh = {0x4D42, (DWORD)(sizeof(bfh) + sizeof(bih) + bytes), 0, 0, sizeof(bfh) + sizeof(bih)};
     FILE* f = _wfopen(argv[3], L"wb");
     fwrite(&bfh, sizeof(bfh), 1, f);
