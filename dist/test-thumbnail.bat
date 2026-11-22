@@ -1,8 +1,7 @@
 @echo off
 setlocal
 rem Drag a .sldprt/.sldasm/.step/.stp/.stl file onto this script to test the
-rem thumbnail handler. It saves the result next to the file as <name>.thumb.bmp
-rem and opens it.
+rem thumbnail handler. Results go to a temporary folder (not next to your file).
 if "%~1"=="" (
   echo Drag a CAD file onto this script to test it.
   pause
@@ -14,14 +13,16 @@ if not exist "%DLL%" (
   pause
   exit /b 1
 )
-set "OUT=%~dpn1.thumb.bmp"
+set "OUTDIR=%TEMP%\CadThumbnailTest"
+if not exist "%OUTDIR%" mkdir "%OUTDIR%"
+set "OUT=%OUTDIR%\%~n1.thumb.bmp"
 "%~dp0wintest.exe" "%DLL%" "%~f1" "%OUT%" 256
 if errorlevel 1 (
   echo.
-  echo TEST FAILED - please copy the lines above and send them back.
+  echo TEST FAILED - please send a photo of this window.
 ) else (
   echo.
-  echo Success - opening %OUT%
+  echo Thumbnail saved in %OUTDIR% - opening it.
   start "" "%OUT%"
 )
 pause

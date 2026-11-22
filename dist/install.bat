@@ -36,7 +36,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Installed (v3). Thumbnails are now enabled for:
+echo Installed (v4). Thumbnails are now enabled for:
 echo   .sldprt .sldasm .slddrw  (SolidWorks)
 echo   .step .stp               (STEP)
 echo   .stl                     (STL)

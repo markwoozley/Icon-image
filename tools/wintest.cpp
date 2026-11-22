@@ -25,6 +25,9 @@ static void ShellCheck(const wchar_t* path, UINT size) {
     IShellItem* item = nullptr;
     HRESULT hr = SHCreateItemFromParsingName(path, nullptr, IID_IShellItem, (void**)&item);
     if (FAILED(hr)) { std::printf("open item failed: 0x%08lx\n", hr); return; }
+    DWORD fa = GetFileAttributesW(path);
+    std::printf("file attributes: 0x%08lx%s%s%s\n", fa, (fa & 0x00400000) ? "  [cloud: online-only]" : "",
+                (fa & 0x00080000) ? "  [cloud: always keep on device]" : "", (fa & 0x00001000) ? "  [offline]" : "");
     SFGAOF attrs = 0;
     item->GetAttributes(SFGAO_FILESYSTEM | SFGAO_STORAGE | SFGAO_STREAM, &attrs);
     std::printf("item attributes: 0x%08lx\n", attrs);
@@ -34,9 +37,20 @@ static void ShellCheck(const wchar_t* path, UINT size) {
     if (SUCCEEDED(hr)) {
         ISharedBitmap* sb = nullptr;
         WTS_CACHEFLAGS flags = WTS_DEFAULT;
-        hr = cache->GetThumbnail(item, size, (WTS_FLAGS)(WTS_EXTRACT | WTS_FORCEEXTRACTION), &sb, &flags, nullptr);
+        // 0x8004B205 = "extraction pending": Windows is still working; wait and ask again.
+        for (int tries = 0; tries < 30; tries++) {
+            hr = cache->GetThumbnail(item, size, (WTS_FLAGS)(WTS_EXTRACT | (tries == 0 ? WTS_FORCEEXTRACTION : 0)), &sb,
+                                     &flags, nullptr);
+            if (hr != (HRESULT)0x8004B205) break;
+            Sleep(500);
+        }
         std::printf("thumbnail cache (forced re-extract): 0x%08lx%s\n", hr,
-                    hr == 0x8004B200 ? "  (handler failed)" : hr == 0x8004B203 ? "  (no thumbnail handler / icon only)" : "");
+                    hr == (HRESULT)0x8004B200   ? "  (handler failed)"
+                    : hr == (HRESULT)0x8004B205 ? "  (still pending after 15 s)"
+                    : hr == (HRESULT)0x8004B206 ? "  (extraction blocked)"
+                    : hr == (HRESULT)0x8004B207 ? "  (cloud file: storage provider has no thumbnail)"
+                    : SUCCEEDED(hr)             ? "  OK"
+                                                : "");
         if (sb) {
             SIZE sz = {};
             sb->GetSize(&sz);
@@ -53,7 +67,11 @@ static void ShellCheck(const wchar_t* path, UINT size) {
     if (SUCCEEDED(hr)) {
         SIZE sz = {(LONG)size, (LONG)size};
         HBITMAP b = nullptr;
-        hr = f->GetImage(sz, SIIGBF_THUMBNAILONLY, &b);
+        for (int tries = 0; tries < 20; tries++) {
+            hr = f->GetImage(sz, SIIGBF_THUMBNAILONLY, &b);
+            if (hr != (HRESULT)0x8004B205) break;
+            Sleep(500);
+        }
         std::printf("Explorer-style GetImage (thumbnail only): 0x%08lx %s\n", hr, SUCCEEDED(hr) ? "OK" : "FAILED");
         if (b) DeleteObject(b);
         f->Release();
@@ -65,7 +83,7 @@ int wmain(int argc, wchar_t** argv) {
     if (argc < 4) return 2;
     UINT size = argc > 4 ? (UINT)_wtoi(argv[4]) : 256;
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    std::printf("CAD thumbnail test v3\n");
+    std::printf("CAD thumbnail test v4\n");
     HMODULE m = LoadLibraryW(argv[1]);
     if (!m) { std::printf("LoadLibrary failed %lu\n", GetLastError()); return 1; }
     auto reg = (HRESULT(WINAPI*)())GetProcAddress(m, "DllRegisterServer");

@@ -50,7 +50,8 @@ which writes the thumbnail to an image so the renderer can be checked without Wi
 ## Layout
 
 - `src/` – portable core: STL loader, STEP reader/tessellator, SolidWorks preview extractor
-  (OLE compound file + 2015+ container with a built-in DEFLATE decoder), software renderer.
+  (OLE compound file + 2015+ container with a built-in DEFLATE/PNG decoder; picks the preview with the
+  most content and crops to the part), software renderer.
 - `win/dllmain.cpp` – the Explorer `IThumbnailProvider` COM handler and per-user registration.
 - `tools/` – `thumbtest` (host) and `wintest` (Windows: registers the DLL, loads it through COM
   like Explorer does and saves the thumbnail as a BMP).
