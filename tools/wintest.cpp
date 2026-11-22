@@ -5,6 +5,7 @@
 #include <objbase.h>
 #include <shlwapi.h>
 #include <thumbcache.h>
+#include <shobjidl.h>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -14,10 +15,57 @@
 static const CLSID CLSID_Cad = {0x7fba209c, 0x0dbc, 0x49ba, {0x8a, 0xbf, 0xee, 0x61, 0xff, 0x07, 0x0e, 0x5b}};
 static const IID IID_Thumb = {0xe357fccd, 0xa995, 0x4576, {0xb0, 0x1f, 0x23, 0x46, 0x30, 0x15, 0x4e, 0x96}};
 
+// Asks the Windows shell for the thumbnail exactly as File Explorer does
+// (handler lookup, out-of-process host, thumbnail cache).
+static void ShellCheck(const wchar_t* path, UINT size) {
+    static const IID kIID_IShellItemImageFactory = {0xbcc18b79, 0xba16, 0x442f, {0x80, 0xc4, 0x8a, 0x59, 0xc3, 0x0c, 0x46, 0x3b}};
+    static const CLSID kCLSID_LocalThumbnailCache = {0x50ef4544, 0xac9f, 0x4a8e, {0xb2, 0x1b, 0x8a, 0x26, 0x18, 0x0d, 0xb1, 0x3f}};
+    static const IID kIID_IThumbnailCache = {0xf676c15d, 0x596a, 0x4ce2, {0x82, 0x34, 0x33, 0x99, 0x6f, 0x44, 0x5d, 0xb1}};
+    std::printf("\n--- Windows shell check (what Explorer sees) ---\n");
+    IShellItem* item = nullptr;
+    HRESULT hr = SHCreateItemFromParsingName(path, nullptr, IID_IShellItem, (void**)&item);
+    if (FAILED(hr)) { std::printf("open item failed: 0x%08lx\n", hr); return; }
+    SFGAOF attrs = 0;
+    item->GetAttributes(SFGAO_FILESYSTEM | SFGAO_STORAGE | SFGAO_STREAM, &attrs);
+    std::printf("item attributes: 0x%08lx\n", attrs);
+
+    IThumbnailCache* cache = nullptr;
+    hr = CoCreateInstance(kCLSID_LocalThumbnailCache, nullptr, CLSCTX_INPROC_SERVER, kIID_IThumbnailCache, (void**)&cache);
+    if (SUCCEEDED(hr)) {
+        ISharedBitmap* sb = nullptr;
+        WTS_CACHEFLAGS flags = WTS_DEFAULT;
+        hr = cache->GetThumbnail(item, size, (WTS_FLAGS)(WTS_EXTRACT | WTS_FORCEEXTRACTION), &sb, &flags, nullptr);
+        std::printf("thumbnail cache (forced re-extract): 0x%08lx%s\n", hr,
+                    hr == 0x8004B200 ? "  (handler failed)" : hr == 0x8004B203 ? "  (no thumbnail handler / icon only)" : "");
+        if (sb) {
+            SIZE sz = {};
+            sb->GetSize(&sz);
+            std::printf("  shell thumbnail size %ldx%ld\n", sz.cx, sz.cy);
+            sb->Release();
+        }
+        cache->Release();
+    } else {
+        std::printf("thumbnail cache unavailable: 0x%08lx\n", hr);
+    }
+
+    IShellItemImageFactory* f = nullptr;
+    hr = item->QueryInterface(kIID_IShellItemImageFactory, (void**)&f);
+    if (SUCCEEDED(hr)) {
+        SIZE sz = {(LONG)size, (LONG)size};
+        HBITMAP b = nullptr;
+        hr = f->GetImage(sz, SIIGBF_THUMBNAILONLY, &b);
+        std::printf("Explorer-style GetImage (thumbnail only): 0x%08lx %s\n", hr, SUCCEEDED(hr) ? "OK" : "FAILED");
+        if (b) DeleteObject(b);
+        f->Release();
+    }
+    item->Release();
+}
+
 int wmain(int argc, wchar_t** argv) {
     if (argc < 4) return 2;
     UINT size = argc > 4 ? (UINT)_wtoi(argv[4]) : 256;
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    std::printf("CAD thumbnail test v3\n");
     HMODULE m = LoadLibraryW(argv[1]);
     if (!m) { std::printf("LoadLibrary failed %lu\n", GetLastError()); return 1; }
     auto reg = (HRESULT(WINAPI*)())GetProcAddress(m, "DllRegisterServer");
@@ -117,6 +165,7 @@ int wmain(int argc, wchar_t** argv) {
     fwrite(px, bytes, 1, f);
     fclose(f);
     tp->Release(); init->Release(); unk->Release(); stm->Release();
+    ShellCheck(argv[2], size);
     CoUninitialize();
     return 0;
 }
