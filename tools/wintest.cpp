@@ -7,6 +7,9 @@
 #include <thumbcache.h>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
+#include "../src/thumbnail.h"
 
 static const CLSID CLSID_Cad = {0x7fba209c, 0x0dbc, 0x49ba, {0x8a, 0xbf, 0xee, 0x61, 0xff, 0x07, 0x0e, 0x5b}};
 static const IID IID_Thumb = {0xe357fccd, 0xa995, 0x4576, {0xb0, 0x1f, 0x23, 0x46, 0x30, 0x15, 0x4e, 0x96}};
@@ -41,6 +44,25 @@ int wmain(int argc, wchar_t** argv) {
     WTS_ALPHATYPE at;
     hr = tp->GetThumbnail(size, &bmp, &at);
     std::printf("GetThumbnail: 0x%08lx alpha=%d\n", hr, (int)at);
+
+    // Diagnostic report: run the same reader code directly and explain.
+    {
+        std::vector<uint8_t> data;
+        if (FILE* in = _wfopen(argv[2], L"rb")) {
+            uint8_t buf[65536];
+            size_t got;
+            while ((got = fread(buf, 1, sizeof(buf), in)) > 0) data.insert(data.end(), buf, buf + got);
+            fclose(in);
+        }
+        std::string ext;
+        const wchar_t* dot = wcsrchr(argv[2], L'.');
+        for (const wchar_t* c = dot; c && *c; c++) ext.push_back(*c < 128 ? (char)*c : '?');
+        Image img;
+        std::vector<uint8_t> enc;
+        std::string log;
+        MakeThumbnail(data.data(), data.size(), (int)size, img, enc, ext, &log);
+        std::printf("\n--- report ---\n%s--------------\n", log.c_str());
+    }
     if (FAILED(hr)) return 1;
     BITMAP bm;
     GetObject(bmp, sizeof(bm), &bm);

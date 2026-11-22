@@ -62,7 +62,16 @@ public:
         if (!stream) return E_INVALIDARG;
         if (!data_.empty()) return HRESULT_FROM_WIN32(ERROR_ALREADY_INITIALIZED);
         STATSTG st = {};
-        if (SUCCEEDED(stream->Stat(&st, STATFLAG_NONAME)) && st.cbSize.QuadPart > kMaxFileBytes) return E_FAIL;
+        if (SUCCEEDED(stream->Stat(&st, STATFLAG_DEFAULT))) {
+            if (st.pwcsName) {
+                // Keep the file extension; it tells us which reader to use.
+                const wchar_t* dot = wcsrchr(st.pwcsName, L'.');
+                if (dot)
+                    for (const wchar_t* c = dot; *c && ext_.size() < 16; c++) ext_.push_back(*c < 128 ? (char)*c : '?');
+                CoTaskMemFree(st.pwcsName);
+            }
+            if (st.cbSize.QuadPart > kMaxFileBytes) return E_FAIL;
+        }
         try {
             if (st.cbSize.QuadPart) data_.reserve((size_t)st.cbSize.QuadPart);
             BYTE buf[1 << 16];
@@ -84,10 +93,11 @@ public:
     IFACEMETHODIMP GetThumbnail(UINT cx, HBITMAP* phbmp, WTS_ALPHATYPE* alpha) override {
         if (!phbmp || !alpha) return E_POINTER;
         *phbmp = nullptr;
+        *alpha = WTSAT_UNKNOWN;
         try {
             Image img;
             std::vector<uint8_t> encoded;
-            ThumbKind k = MakeThumbnail(data_.data(), data_.size(), (int)cx, img, encoded);
+            ThumbKind k = MakeThumbnail(data_.data(), data_.size(), (int)cx, img, encoded, ext_);
             if (k == ThumbKind::Rendered) {
                 *alpha = WTSAT_ARGB;
                 return MakeBitmap(img.width, img.height, img.bgra.data(), phbmp);
@@ -173,6 +183,7 @@ private:
 
     LONG refs_ = 1;
     std::vector<uint8_t> data_;
+    std::string ext_;
 };
 
 class ClassFactory : public IClassFactory {

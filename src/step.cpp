@@ -925,16 +925,16 @@ struct DSU {
 }  // namespace
 
 bool LooksLikeStep(const uint8_t* d, size_t n) {
-    size_t lim = n < 1024 ? n : 1024;
+    size_t lim = n < 4096 ? n : 4096;
     for (size_t i = 0; i + 12 <= lim; i++)
         if (std::memcmp(d + i, "ISO-10303-21", 12) == 0) return true;
     return false;
 }
 
-bool LoadStep(const uint8_t* data, size_t len, Scene& scene) {
-    if (len > 0xFFFFFFF0u) return false;
+bool LoadStep(const uint8_t* data, size_t len, Scene& scene, std::string* log) {
+    if (len > 0xFFFFFFF0u) { if (log) *log += "STEP: file too large\n"; return false; }
     StepFile f;
-    if (!f.Index((const char*)data, len)) return false;
+    if (!f.Index((const char*)data, len)) { if (log) *log += "STEP: no DATA section / entities found\n"; return false; }
     Builder b(f);
 
     // Representations and their items.
@@ -1081,6 +1081,63 @@ bool LoadStep(const uint8_t* data, size_t len, Scene& scene) {
                               w.Apply(Vec3(local.lines[i + 3], local.lines[i + 4], local.lines[i + 5])));
             }
         }
+    }
+    if (scene.Empty()) {
+        // AP242 tessellated geometry (triangulated faces / surface sets).
+        f.ForEach([&](int id, const std::string& t) {
+            bool face = t == "TRIANGULATED_FACE";
+            if (!face && t != "TRIANGULATED_SURFACE_SET") return;
+            auto* a = f.Args(id);
+            size_t pnIdx = face ? 5 : 4, triIdx = face ? 6 : 5;
+            if (!a || a->size() <= triIdx || (*a)[1].kind != Param::Ref) return;
+            auto* cl = f.Args((*a)[1].ref);  // COORDINATES_LIST('', n, ((x,y,z),...))
+            if (!cl || cl->size() < 3 || (*cl)[2].kind != Param::List) return;
+            std::vector<Vec3> pts;
+            for (auto& c : (*cl)[2].list) {
+                if (c.kind != Param::List || c.list.size() < 3) { pts.push_back(Vec3()); continue; }
+                pts.push_back(Vec3(c.list[0].num, c.list[1].num, c.list[2].num));
+            }
+            std::vector<long> pn;
+            if ((*a)[pnIdx].kind == Param::List)
+                for (auto& v : (*a)[pnIdx].list) pn.push_back((long)v.num);
+            auto at = [&](long i, Vec3& out) {
+                if (!pn.empty()) {
+                    if (i < 1 || i > (long)pn.size()) return false;
+                    i = pn[i - 1];
+                }
+                if (i < 1 || i > (long)pts.size()) return false;
+                out = pts[i - 1];
+                return true;
+            };
+            if ((*a)[triIdx].kind != Param::List) return;
+            for (auto& tri : (*a)[triIdx].list) {
+                if (tri.kind != Param::List || tri.list.size() < 3) continue;
+                Vec3 p0, p1, p2;
+                if (at((long)tri.list[0].num, p0) && at((long)tri.list[1].num, p1) && at((long)tri.list[2].num, p2))
+                    scene.AddTri(p0, p1, p2);
+            }
+        });
+    }
+    if (scene.Empty()) {
+        // Last resort: draw every edge curve as a wireframe.
+        f.ForEach([&](int id, const std::string& t) {
+            if (t != "EDGE_CURVE") return;
+            const std::vector<Vec3>* e = b.Edge(id);
+            for (size_t i = 0; e && i + 1 < e->size(); i++) scene.AddLine((*e)[i], (*e)[i + 1]);
+        });
+    }
+    if (log) {
+        size_t faces = 0, edges = 0, total = 0, tri = 0;
+        f.ForEach([&](int, const std::string& t) {
+            total++;
+            if (IsFace(t)) faces++;
+            if (t == "EDGE_CURVE") edges++;
+            if (t.find("TRIANGULATED") != std::string::npos || t.find("TESSELLATED") != std::string::npos) tri++;
+        });
+        *log += "STEP: " + std::to_string(total) + " entities, " + std::to_string(faces) + " faces, " +
+                std::to_string(edges) + " edges, " + std::to_string(tri) + " tessellated items, " +
+                std::to_string(reps.size()) + " representations -> " + std::to_string(scene.tris.size() / 9) +
+                " triangles, " + std::to_string(scene.lines.size() / 6) + " lines\n";
     }
     return !scene.Empty();
 }

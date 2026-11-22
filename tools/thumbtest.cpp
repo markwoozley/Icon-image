@@ -16,7 +16,11 @@ int main(int argc, char** argv) {
     Image img;
     std::vector<uint8_t> enc;
     auto t0 = std::chrono::steady_clock::now();
-    ThumbKind k = MakeThumbnail(data.data(), data.size(), size, img, enc);
+    std::string path = argv[1], ext, log;
+    size_t dot = path.rfind('.');
+    if (dot != std::string::npos) ext = path.substr(dot);
+    ThumbKind k = MakeThumbnail(data.data(), data.size(), size, img, enc, ext, &log);
+    if (std::getenv("THUMB_LOG")) std::fputs(log.c_str(), stdout);
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     std::string out = argv[2];
     if (k == ThumbKind::Rendered) {

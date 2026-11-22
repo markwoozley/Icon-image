@@ -9,6 +9,9 @@ x86_64-w64-mingw32-g++ -O2 -std=c++17 -shared -static -static-libgcc -static-lib
   -DUNICODE -D_UNICODE -s -o dist/CadThumbnails.dll \
   src/*.cpp win/dllmain.cpp win/CadThumbnails.def \
   -lole32 -luuid -lshlwapi -lwindowscodecs -lgdi32 -ladvapi32 -lshell32
+x86_64-w64-mingw32-g++ -O2 -std=c++17 -municode -static -s -o dist/wintest.exe \
+  tools/wintest.cpp src/*.cpp -lole32 -luuid -lshlwapi -lgdi32 -ladvapi32
+echo "built dist/wintest.exe"
 echo "built dist/CadThumbnails.dll"
 g++ -O2 -std=c++17 -o build/thumbtest src/*.cpp tools/thumbtest.cpp
 echo "built build/thumbtest (usage: build/thumbtest <file> <out-prefix> [size])"

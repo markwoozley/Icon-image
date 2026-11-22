@@ -1,6 +1,7 @@
 #pragma once
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 struct Vec3 {
@@ -44,9 +45,9 @@ struct Image {
     std::vector<uint8_t> bgra;
 };
 
-bool LoadStl(const uint8_t* data, size_t len, Scene& scene);
+bool LoadStl(const uint8_t* data, size_t len, Scene& scene, bool force = false);
 bool LooksLikeStl(const uint8_t* data, size_t len);
-bool LoadStep(const uint8_t* data, size_t len, Scene& scene);
+bool LoadStep(const uint8_t* data, size_t len, Scene& scene, std::string* log = nullptr);
 bool LooksLikeStep(const uint8_t* data, size_t len);
 
 // Renders the scene in an isometric view into a size x size image.

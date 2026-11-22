@@ -210,6 +210,65 @@ bool FromSections(const uint8_t* data, size_t len, std::vector<uint8_t>& image) 
     return true;
 }
 
+// Walks PNG chunks starting at p and returns the full length up to IEND, or 0.
+size_t PngLength(const uint8_t* p, size_t n) {
+    if (!LooksLikePng(p, n)) return 0;
+    size_t off = 8;
+    while (off + 12 <= n) {
+        uint32_t len = (p[off] << 24) | (p[off + 1] << 16) | (p[off + 2] << 8) | p[off + 3];
+        if (len > n - off - 12) return 0;
+        bool iend = std::memcmp(p + off + 4, "IEND", 4) == 0;
+        off += 12 + len;
+        if (iend) return off;
+    }
+    return 0;
+}
+
+// Fallback for container variants with a different section header: find the
+// (nibble-swapped) stream name "PreviewPNG" and inflate what follows it.
+bool FromEncodedName(const uint8_t* data, size_t len, std::vector<uint8_t>& image, int& hits) {
+    const char* plain = "PreviewPNG";
+    uint8_t enc[10];
+    for (int k = 0; k < 10; k++) {
+        uint8_t c = (uint8_t)plain[k];
+        enc[k] = (uint8_t)(((c << 4) | (c >> 4)) & 0xFF);
+    }
+    std::vector<uint8_t> best, tmp;
+    for (size_t i = 0; i + 10 < len; i++) {
+        if (data[i] != enc[0] || std::memcmp(data + i, enc, 10) != 0) continue;
+        hits++;
+        size_t start = i + 10;
+        for (size_t skip = 0; skip <= 8 && start + skip < len; skip++) {
+            const uint8_t* p = data + start + skip;
+            size_t avail = len - start - skip;
+            size_t raw = PngLength(p, avail);
+            if (raw) { tmp.assign(p, p + raw); }
+            else {
+                tmp.clear();
+                if (!RawInflate(p, avail, tmp, 32u * 1024 * 1024) || !LooksLikePng(tmp.data(), tmp.size())) continue;
+            }
+            if (tmp.size() > best.size()) best.swap(tmp);
+            break;
+        }
+    }
+    if (best.empty()) return false;
+    image.swap(best);
+    return true;
+}
+
+// Last resort: an uncompressed PNG anywhere in the file (largest wins).
+bool FromRawPng(const uint8_t* data, size_t len, std::vector<uint8_t>& image) {
+    size_t bestOff = 0, bestLen = 0;
+    for (size_t i = 0; i + 8 < len; i++) {
+        if (data[i] != 0x89 || data[i + 1] != 'P') continue;
+        size_t l = PngLength(data + i, len - i);
+        if (l > bestLen) { bestLen = l; bestOff = i; }
+    }
+    if (!bestLen) return false;
+    image.assign(data + bestOff, data + bestOff + bestLen);
+    return true;
+}
+
 }  // namespace
 
 bool LooksLikePng(const uint8_t* p, size_t n) {
@@ -217,7 +276,31 @@ bool LooksLikePng(const uint8_t* p, size_t n) {
     return n > 8 && std::memcmp(p, sig, 8) == 0;
 }
 
-bool ExtractSolidWorksPreview(const uint8_t* data, size_t len, std::vector<uint8_t>& image) {
-    if (FromCfb(data, len, image)) return true;
-    return FromSections(data, len, image);
+bool ExtractSolidWorksPreview(const uint8_t* data, size_t len, std::vector<uint8_t>& image, std::string* log) {
+    if (FromCfb(data, len, image)) { if (log) *log += "SolidWorks: preview found (OLE format)\n"; return true; }
+    if (FromSections(data, len, image)) { if (log) *log += "SolidWorks: preview found (2015+ format)\n"; return true; }
+    int hits = 0;
+    if (FromEncodedName(data, len, image, hits)) { if (log) *log += "SolidWorks: preview found (by name)\n"; return true; }
+    if (FromRawPng(data, len, image)) { if (log) *log += "SolidWorks: preview found (raw PNG)\n"; return true; }
+    if (log) {
+        static const uint8_t marker[6] = {0x14, 0x00, 0x06, 0x00, 0x08, 0x00};
+        size_t markers = 0;
+        for (size_t i = 0; i + 6 <= len; i++)
+            if (data[i] == 0x14 && std::memcmp(data + i, marker, 6) == 0) markers++;
+        bool ole = len >= 8 && data[0] == 0xD0 && data[1] == 0xCF;
+        *log += "SolidWorks: no preview found. OLE=" + std::string(ole ? "yes" : "no") +
+                ", section markers=" + std::to_string(markers) + ", 'PreviewPNG' names=" + std::to_string(hits) + "\n";
+        if (ole) {
+            Cfb cfb;
+            if (!cfb.Open(data, len)) *log += "  OLE container could not be opened\n";
+            else {
+                *log += "  OLE streams:";
+                int k = 0;
+                for (auto& e : cfb.Entries())
+                    if (e.type == 2 && k++ < 40) *log += " " + e.name;
+                *log += "\n";
+            }
+        }
+    }
+    return false;
 }

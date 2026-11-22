@@ -24,10 +24,13 @@ static bool IsBinaryStl(const uint8_t* d, size_t n) {
 
 bool LooksLikeStl(const uint8_t* d, size_t n) { return IsAsciiStl(d, n) || IsBinaryStl(d, n); }
 
-bool LoadStl(const uint8_t* d, size_t n, Scene& scene) {
-    if (IsBinaryStl(d, n) && !IsAsciiStl(d, n)) {
+bool LoadStl(const uint8_t* d, size_t n, Scene& scene, bool force) {
+    // `force`: the file is known to be STL (by extension), so accept binary
+    // files whose triangle count in the header is wrong.
+    if ((IsBinaryStl(d, n) || force) && !IsAsciiStl(d, n) && n >= 84 + 50) {
         uint32_t count;
         std::memcpy(&count, d + 80, 4);
+        if ((uint64_t)count * 50 + 84 > n || count == 0) count = (uint32_t)((n - 84) / 50);
         scene.tris.reserve(scene.tris.size() + (size_t)count * 9);
         for (uint32_t t = 0; t < count; t++) {
             const uint8_t* p = d + 84 + (size_t)t * 50 + 12;
